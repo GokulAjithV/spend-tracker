@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Virtual env
+.venv/
+venv/
+
+# Secrets - never commit
+.env
+
+# SQLite database files
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Editors
+.vscode/
+.idea/
+.DS_Store

@@ -1,0 +1,6 @@
+- FastAPI + SQLAlchemy 2 + SQLite, sync endpoints
+- Money: int paise in DB, string "250.50" in API. Never float.
+- Dates: ISO YYYY-MM-DD
+- All SQL in app/repo.py. Routes stay thin.
+- No new dependencies without asking.
+- Explain every non-obvious choice in your reply.
