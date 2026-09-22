@@ -1,0 +1,389 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Spend Tracker</title>
+<style>
+  :root {
+    --bg: #f5f6f8; --card: #fff; --text: #1f2328; --muted: #6b7280; --border: #e5e7eb;
+    --accent: #2563eb; --up: #b42318; --down: #067647; --warn-bg: #fff7e6; --warn: #92400e;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif; font-size: 15px;
+    background: var(--bg); color: var(--text); max-width: 900px; margin: 0 auto; padding: 24px 16px;
+  }
+  h1 { font-size: 1.5rem; margin: 0 0 16px; }
+  h2 { font-size: 1.05rem; margin: 0 0 12px; }
+  h3 { font-size: 1.2rem; margin: 0 0 12px; }
+  section {
+    background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+    padding: 16px 20px; margin-bottom: 16px;
+  }
+  label { display: inline-flex; flex-direction: column; gap: 4px; margin: 0 12px 10px 0; color: var(--muted); font-size: 0.85rem; }
+  input {
+    font: inherit; color: var(--text); padding: 7px 10px; border: 1px solid var(--border);
+    border-radius: 6px; background: #fff;
+  }
+  input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  button {
+    font: inherit; padding: 7px 16px; border: 0; border-radius: 6px;
+    background: var(--accent); color: #fff; cursor: pointer; align-self: flex-end;
+  }
+  button:hover { filter: brightness(0.92); }
+  form { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 0 4px; }
+  #key-form { align-items: center; gap: 8px; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { border-bottom: 1px solid var(--border); padding: 8px 10px; text-align: left; }
+  th { color: var(--muted); font-weight: 600; font-size: 0.85rem; }
+  tbody tr:last-child td { border-bottom: 0; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .error { color: var(--up); }
+  .ok { color: var(--down); }
+  .muted { color: var(--muted); }
+  ul.error { margin: 4px 0 0; padding-left: 20px; }
+  ul.error:empty, p.error:empty { display: none; }
+
+  /* Summary */
+  .section-head { display: flex; justify-content: space-between; align-items: flex-end; flex-wrap: wrap; gap: 8px; }
+  .section-head label { margin: 0; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 16px; }
+  .stat { border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; }
+  .stat-label { color: var(--muted); font-size: 0.85rem; }
+  .stat-value { font-size: 1.25rem; font-weight: 600; margin-top: 4px; font-variant-numeric: tabular-nums; }
+  .up { color: var(--up); }
+  .down { color: var(--down); }
+  .flags { list-style: none; margin: 0 0 16px; padding: 0; display: grid; gap: 6px; }
+  .flags li { background: var(--warn-bg); color: var(--warn); border-radius: 6px; padding: 8px 12px; }
+</style>
+</head>
+<body>
+<h1>Spend Tracker</h1>
+
+<section>
+  <h2>API key</h2>
+  <form id="key-form">
+    <input id="api-key" type="password" autocomplete="off" placeholder="X-API-Key" required>
+    <button type="submit">Connect</button>
+    <span id="key-status" class="muted">Not connected</span>
+  </form>
+</section>
+
+<section>
+  <h2>Add expense</h2>
+  <form id="expense-form">
+    <label>Amount <input name="amount" type="text" inputmode="decimal" placeholder="250.50" required></label>
+    <label>Category <input name="category" type="text" maxlength="50" required></label>
+    <label>Note <input name="note" type="text" maxlength="500"></label>
+    <label>Date <input name="spent_on" type="date" required></label>
+    <button type="submit">Add</button>
+  </form>
+  <ul id="expense-errors" class="error"></ul>
+</section>
+
+<section>
+  <div class="section-head">
+    <h2>Summary</h2>
+    <label>Month <input id="month" type="month" required></label>
+  </div>
+  <p id="summary-error" class="error"></p>
+  <div id="summary"></div>
+</section>
+
+<section>
+  <h2>Recent expenses</h2>
+  <p id="list-error" class="error"></p>
+  <div id="expenses"></div>
+</section>
+
+<script>
+"use strict";
+
+// ---- API key -------------------------------------------------------------
+
+let apiKey = "";
+try { apiKey = sessionStorage.getItem("apiKey") || ""; } catch { /* storage blocked */ }
+
+function saveKey(key) {
+  apiKey = key;
+  try { sessionStorage.setItem("apiKey", key); } catch { /* storage blocked */ }
+}
+
+// ---- fetch helper --------------------------------------------------------
+
+class ApiError extends Error {
+  constructor(status, messages) {
+    super(messages.join("; "));
+    this.status = status;
+    this.messages = messages;
+  }
+}
+
+// FastAPI 422s carry detail = [{loc: ["body", "amount"], msg: "..."}]; other
+// errors carry detail = "string". Both become a flat list of readable lines.
+function errorMessages(detail) {
+  if (Array.isArray(detail)) {
+    return detail.map((e) => `${e.loc.slice(1).join(".") || "request"}: ${e.msg}`);
+  }
+  return [typeof detail === "string" ? detail : "Unexpected error"];
+}
+
+async function api(path, options = {}) {
+  let res;
+  try {
+    res = await fetch(path, {
+      ...options,
+      headers: { "Content-Type": "application/json", "X-API-Key": apiKey, ...options.headers },
+    });
+  } catch {
+    throw new ApiError(0, ["Network error: is the server running?"]);
+  }
+  const body = await res.json().catch(() => null);
+  if (res.ok) return body;
+
+  if (res.status === 401) {
+    setKeyStatus("Wrong API key", "error");
+    throw new ApiError(401, ["Wrong or missing API key"]);
+  }
+  if (res.status === 422) throw new ApiError(422, errorMessages(body && body.detail));
+  throw new ApiError(res.status, [`Request failed (${res.status})`]);
+}
+
+// ---- rendering helpers (textContent only: categories and notes are user input)
+
+function el(tag, text, className) {
+  const node = document.createElement(tag);
+  if (text !== undefined && text !== null) node.textContent = String(text);
+  if (className) node.className = className;
+  return node;
+}
+
+function table(headers, rows) {
+  const t = el("table");
+  const head = el("tr");
+  for (const h of headers) head.append(el("th", h.label, h.num ? "num" : ""));
+  t.append(el("thead"), el("tbody"));
+  t.tHead.append(head);
+  for (const row of rows) {
+    const tr = el("tr");
+    // A cell is plain text, or {text, className} when it needs styling.
+    row.forEach((cell, i) => {
+      const { text, className = "" } = cell !== null && typeof cell === "object" ? cell : { text: cell };
+      tr.append(el("td", text, [headers[i].num ? "num" : "", className].join(" ").trim()));
+    });
+    t.tBodies[0].append(tr);
+  }
+  return t;
+}
+
+function showError(target, err) {
+  const messages = err instanceof ApiError ? err.messages : [String(err)];
+  if (target.tagName === "UL") {
+    target.replaceChildren(...messages.map((m) => el("li", m)));
+  } else {
+    target.textContent = messages.join("; ");
+  }
+}
+
+function clearError(target) { target.replaceChildren(); }
+
+function setKeyStatus(text, className) {
+  const status = document.getElementById("key-status");
+  status.textContent = text;
+  status.className = className;
+}
+
+// Local calendar date as YYYY-MM-DD. toISOString() would give the UTC date,
+// which in India is yesterday until 05:30.
+function localDate(d = new Date()) {
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+// ---- summary -------------------------------------------------------------
+
+const monthInput = document.getElementById("month");
+
+// "YYYY-MM" for the local month. toISOString() is UTC: in India it still
+// reports last month until 05:30 on the 1st.
+function localMonth(d = new Date()) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+
+// "2026-09" -> "September 2026". Built from numbers, so no timezone involved.
+function monthName(yyyyMm) {
+  const [year, month] = yyyyMm.split("-").map(Number);
+  return new Date(year, month - 1, 1).toLocaleString("en-IN", { month: "long", year: "numeric" });
+}
+
+// "1234567.50" -> "₹12,34,567.50". String work only: the amount never becomes a
+// float. Indian grouping (last 3 digits, then pairs) since amounts are INR.
+function formatMoney(amount) {
+  const negative = amount.startsWith("-");
+  const [whole, fraction] = (negative ? amount.slice(1) : amount).split(".");
+  const head = whole.slice(0, -3);
+  const tail = whole.slice(-3);
+  const grouped = head ? `${head.replace(/\B(?=(\d{2})+$)/g, ",")},${tail}` : tail;
+  return `${negative ? "-" : ""}₹${grouped}.${fraction}`;
+}
+
+// Percent is a number, not money; toFixed only formats an already-rounded value.
+function percentChange(p) {
+  if (p > 0) return { text: `▲ ${p.toFixed(2)}%`, className: "up" };
+  if (p < 0) return { text: `▼ ${Math.abs(p).toFixed(2)}%`, className: "down" };
+  return { text: "0.00%", className: "" };
+}
+
+function capitalize(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
+
+function stat(label, value, className = "") {
+  const card = el("div", null, "stat");
+  card.append(el("div", label, "stat-label"), el("div", value, `stat-value ${className}`.trim()));
+  return card;
+}
+
+function momStat(mom) {
+  if (mom.percent === null) return stat("Change", "No spend last month");
+  if (mom.amount === "0.00") return stat("Change", "No change");
+  const down = mom.amount.startsWith("-");
+  const amount = formatMoney(down ? mom.amount.slice(1) : mom.amount);
+  const pct = Math.abs(mom.percent).toFixed(2);
+  return stat("Change", `${down ? "▼" : "▲"} ${amount} (${pct}%)`, down ? "down" : "up");
+}
+
+async function loadSummary() {
+  const errorBox = document.getElementById("summary-error");
+  const out = document.getElementById("summary");
+  clearError(errorBox);
+  if (!monthInput.value) monthInput.value = localMonth();
+  try {
+    const s = await api(`/summary?month=${encodeURIComponent(monthInput.value)}`);
+    const prevName = monthName(s.previous_month.month);
+
+    const title = monthName(s.month) + (s.is_partial_month ? " (month in progress)" : "");
+    const stats = el("div", null, "stats");
+    stats.append(
+      stat("Spent this month", formatMoney(s.total)),
+      stat(`Last month (${prevName})`, formatMoney(s.previous_month.total)),
+      momStat(s.mom_change),
+    );
+    const parts = [el("h3", title), stats];
+
+    const flagged = s.by_category.filter((c) => c.flagged);
+    if (flagged.length > 0) {
+      const flags = el("ul", null, "flags");
+      for (const c of flagged) {
+        flags.append(el("li", `⚠ ${capitalize(c.category)} is up ${c.change_percent.toFixed(2)}% vs ${prevName}`));
+      }
+      parts.push(flags);
+    }
+
+    parts.push(
+      s.by_category.length === 0
+        ? el("p", "No expenses in these two months.", "muted")
+        : table(
+            [
+              { label: "Category" },
+              { label: "This month", num: true },
+              { label: "Last month", num: true },
+              { label: "Change", num: true },
+            ],
+            s.by_category.map((c) => [
+              capitalize(c.category),
+              formatMoney(c.total),
+              formatMoney(c.previous_total),
+              c.change_percent === null ? { text: "New", className: "up" } : percentChange(c.change_percent),
+            ]),
+          ),
+    );
+    out.replaceChildren(...parts);
+    return true;
+  } catch (err) {
+    out.replaceChildren();
+    showError(errorBox, err);
+    return false;
+  }
+}
+
+monthInput.addEventListener("change", () => { if (apiKey) loadSummary(); });
+
+// ---- recent expenses -----------------------------------------------------
+
+async function loadExpenses() {
+  const errorBox = document.getElementById("list-error");
+  const out = document.getElementById("expenses");
+  clearError(errorBox);
+  try {
+    const { expenses } = await api("/expenses?limit=20");
+    out.replaceChildren(
+      expenses.length === 0
+        ? el("p", "No expenses yet.", "muted")
+        : table(
+            [{ label: "Date" }, { label: "Category" }, { label: "Amount", num: true }, { label: "Note" }],
+            expenses.map((e) => [e.spent_on, e.category, e.amount, e.note ?? ""]),
+          ),
+    );
+  } catch (err) {
+    out.replaceChildren();
+    showError(errorBox, err);
+  }
+}
+
+// ---- add expense ---------------------------------------------------------
+
+const expenseForm = document.getElementById("expense-form");
+const expenseErrors = document.getElementById("expense-errors");
+
+function resetExpenseForm() {
+  expenseForm.reset();
+  expenseForm.elements.spent_on.value = localDate();
+}
+
+expenseForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  clearError(expenseErrors);
+  const f = expenseForm.elements;
+  const note = f.note.value.trim();
+  const payload = {
+    amount: f.amount.value.trim(), // sent as the typed string, never a number
+    category: f.category.value,
+    note: note === "" ? null : note,
+    spent_on: f.spent_on.value,
+  };
+  try {
+    await api("/expenses", { method: "POST", body: JSON.stringify(payload) });
+    resetExpenseForm();
+    await Promise.all([loadExpenses(), loadSummary()]);
+  } catch (err) {
+    showError(expenseErrors, err);
+  }
+});
+
+// ---- connect -------------------------------------------------------------
+
+async function connect() {
+  setKeyStatus("Connecting…", "muted");
+  if (await loadSummary()) {
+    setKeyStatus("Connected", "ok");
+    await loadExpenses();
+  } else if (document.getElementById("key-status").textContent === "Connecting…") {
+    setKeyStatus("Could not connect", "error");
+  }
+}
+
+document.getElementById("key-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  saveKey(document.getElementById("api-key").value.trim());
+  connect();
+});
+
+resetExpenseForm();
+monthInput.value = monthInput.max = localMonth();
+if (apiKey) {
+  document.getElementById("api-key").value = apiKey;
+  connect();
+}
+</script>
+</body>
+</html>

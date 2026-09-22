@@ -1,8 +1,10 @@
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Annotated
 
 from fastapi import Depends, FastAPI, Query, Security
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 
 from app import config, repo
@@ -70,3 +72,9 @@ def get_summary(
     current = repo.sum_by_category(session, *month_range(month.year, month.month))
     previous = repo.sum_by_category(session, *month_range(prev.year, prev.month))
     return build_summary(month, current, previous, today)
+
+
+# Repo root /ui, next to server/. Mounted last: a mount at "/" matches every
+# path, so any route registered after it would be unreachable.
+UI_DIR = Path(__file__).resolve().parents[2] / "ui"
+app.mount("/", StaticFiles(directory=UI_DIR, html=True), name="ui")
