@@ -6,7 +6,8 @@ from app.main import app
 from app.models import Expense
 
 
-def test_health():
+def test_health(monkeypatch):
+    monkeypatch.setenv("API_KEY", "test-key")
     with TestClient(app) as client:
         assert client.get("/health").json() == {"status": "ok"}
 

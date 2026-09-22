@@ -7,8 +7,11 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app import models  # noqa: F401  -- registers Expense on Base.metadata
+from app.auth import load_api_key
 from app.db import Base, get_db
 from app.main import app
+
+API_KEY = "test-key"
 
 
 @pytest.fixture
@@ -25,13 +28,18 @@ def session_factory() -> Iterator[sessionmaker[Session]]:
 
 
 @pytest.fixture
-def client(session_factory: sessionmaker[Session]) -> Iterator[TestClient]:
+def client(
+    session_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
+) -> Iterator[TestClient]:
     def override_get_db() -> Iterator[Session]:
         with session_factory() as session:
             yield session
 
     app.dependency_overrides[get_db] = override_get_db
     # Not used as a context manager, so lifespan (init_db against the real
-    # database file) does not run.
-    yield TestClient(app)
+    # database file) does not run; this does lifespan's key loading instead.
+    monkeypatch.setenv("API_KEY", API_KEY)
+    app.state.api_key = load_api_key()
+    yield TestClient(app, headers={"X-API-Key": API_KEY})
     app.dependency_overrides.clear()
+    del app.state.api_key
