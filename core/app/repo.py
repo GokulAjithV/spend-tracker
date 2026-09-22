@@ -1,6 +1,6 @@
 from datetime import date
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models import Expense
@@ -34,3 +34,14 @@ def list_expenses(
     # id breaks ties between same-day rows so pages never overlap or skip.
     stmt = stmt.order_by(Expense.spent_on.desc(), Expense.id.desc()).limit(limit).offset(offset)
     return list(session.scalars(stmt))
+
+
+def sum_by_category(session: Session, start: date, end: date) -> dict[str, int]:
+    """Paise per category for start <= spent_on < end. The bare column comparison
+    lets SQLite use ix_expenses_spent_on; strftime(spent_on) would scan every row."""
+    stmt = (
+        select(Expense.category, func.sum(Expense.amount_paise))
+        .where(Expense.spent_on >= start, Expense.spent_on < end)
+        .group_by(Expense.category)
+    )
+    return {category: total for category, total in session.execute(stmt).tuples()}

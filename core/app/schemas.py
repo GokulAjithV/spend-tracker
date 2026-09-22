@@ -11,6 +11,7 @@ from app.models import Expense
 # surface as a 500 instead of a 422.
 _AMOUNT_RE = re.compile(r"\d{1,15}(\.\d{1,2})?")
 _DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
+_MONTH_RE = re.compile(r"\d{4}-\d{2}")
 
 
 def _parse_amount(value: Any) -> int:
@@ -36,8 +37,25 @@ def _parse_date(value: Any) -> date:
         raise ValueError("date is not a valid calendar date") from None
 
 
+def _parse_month(value: Any) -> date:
+    """"2026-09" -> date(2026, 9, 1). The first of the month stands for the month."""
+    if not isinstance(value, str) or not _MONTH_RE.fullmatch(value):
+        raise ValueError("month must be a string in YYYY-MM format")
+    year, month = int(value[:4]), int(value[5:])
+    if not 1 <= month <= 12:
+        raise ValueError("month must be between 01 and 12")
+    # A summary also needs the previous month and the first day of the next one,
+    # and date() cannot represent year 0 or 10000.
+    if not (1, 1) < (year, month) < (9999, 12):
+        raise ValueError("month is out of the supported range")
+    return date(year, month, 1)
+
+
 def format_paise(paise: int) -> str:
-    return f"{paise // 100}.{paise % 100:02d}"
+    # divmod on the absolute value: floor division would turn -920 into "-10.80".
+    sign = "-" if paise < 0 else ""
+    rupees, rest = divmod(abs(paise), 100)
+    return f"{sign}{rupees}.{rest:02d}"
 
 
 Category = Annotated[
@@ -100,3 +118,36 @@ class ExpenseFilters(BaseModel):
         if self.date_from and self.date_to and self.date_from > self.date_to:
             raise ValueError("date_from must be on or before date_to")
         return self
+
+
+class SummaryQuery(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    month: Annotated[date, BeforeValidator(_parse_month)] | None = None
+
+
+class PreviousMonthSummary(BaseModel):
+    month: str
+    total: str
+
+
+class MomChange(BaseModel):
+    amount: str
+    percent: float | None
+
+
+class CategorySummary(BaseModel):
+    category: str
+    total: str
+    previous_total: str
+    change_percent: float | None
+    flagged: bool
+
+
+class Summary(BaseModel):
+    month: str
+    is_partial_month: bool
+    total: str
+    previous_month: PreviousMonthSummary
+    mom_change: MomChange
+    by_category: list[CategorySummary]
