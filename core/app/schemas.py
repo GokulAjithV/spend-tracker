@@ -2,7 +2,7 @@ import re
 from datetime import date, datetime, timezone
 from typing import Annotated, Any
 
-from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, StringConstraints
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, StringConstraints, model_validator
 
 from app.models import Expense
 
@@ -43,6 +43,7 @@ def format_paise(paise: int) -> str:
 Category = Annotated[
     str, StringConstraints(strip_whitespace=True, to_lower=True, min_length=1, max_length=50)
 ]
+IsoDate = Annotated[date, BeforeValidator(_parse_date)]
 
 
 class ExpenseCreate(BaseModel):
@@ -52,7 +53,7 @@ class ExpenseCreate(BaseModel):
     amount_paise: Annotated[int, BeforeValidator(_parse_amount)] = Field(alias="amount")
     category: Category
     note: str | None = Field(default=None, max_length=500)
-    spent_on: Annotated[date, BeforeValidator(_parse_date)]
+    spent_on: IsoDate
 
 
 class ExpenseOut(BaseModel):
@@ -75,3 +76,27 @@ class ExpenseOut(BaseModel):
             # API emits "...Z" and clients don't read it as their local time.
             created_at=expense.created_at.replace(tzinfo=timezone.utc),
         )
+
+
+class ExpenseList(BaseModel):
+    expenses: list[ExpenseOut]
+
+
+class ExpenseFilters(BaseModel):
+    """Query string for GET /expenses. Unknown params are rejected so a typo
+    like ?categroy=food fails loudly instead of silently returning everything."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    # Normalised like ExpenseCreate.category, so ?category=Food matches stored "food".
+    category: list[Category] = []
+    date_from: IsoDate | None = None
+    date_to: IsoDate | None = None
+    limit: int = Field(default=50, ge=1, le=100)
+    offset: int = Field(default=0, ge=0)
+
+    @model_validator(mode="after")
+    def _check_range(self) -> "ExpenseFilters":
+        if self.date_from and self.date_to and self.date_from > self.date_to:
+            raise ValueError("date_from must be on or before date_to")
+        return self
