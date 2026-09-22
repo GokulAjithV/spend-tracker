@@ -2,7 +2,7 @@
 name = "spend-tracker"
 version = "0.1.0"
 description = "Add your description here"
-readme = "README.md"
+readme = "../README.md"
 authors = [
     { name = "GokulAjithV", email = "gokulvasu225@gmail.com" }
 ]
