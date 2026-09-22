@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from app import config, repo
 from app.auth import load_api_key, require_api_key
-from app.db import get_db, init_db
+from app.db import SessionLocal, get_db, init_db
 from app.schemas import (
     ExpenseCreate,
     ExpenseFilters,
@@ -16,6 +16,7 @@ from app.schemas import (
     Summary,
     SummaryQuery,
 )
+from app.seed import seed_if_empty
 from app.summary import build_summary, month_range, previous_month
 
 
@@ -24,6 +25,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Before init_db, so a missing key fails fast without touching the database.
     app.state.api_key = load_api_key()
     init_db()
+    if config.seed_on_startup():
+        with SessionLocal() as session:
+            seed_if_empty(session, config.today())
     yield
 
 app = FastAPI(lifespan=lifespan)

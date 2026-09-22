@@ -14,6 +14,13 @@ from app.main import app
 API_KEY = "test-key"
 
 
+@pytest.fixture(autouse=True)
+def no_seed_on_startup(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Tests that run lifespan must never pick up SEED_ON_STARTUP=true from the
+    # developer's shell: it would seed the real database and skew summaries.
+    monkeypatch.setenv("SEED_ON_STARTUP", "false")
+
+
 @pytest.fixture
 def session_factory() -> Iterator[sessionmaker[Session]]:
     # A fresh in-memory database per test. StaticPool hands every checkout the

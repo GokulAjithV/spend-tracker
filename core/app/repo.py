@@ -15,6 +15,10 @@ def create_expense(
     return expense
 
 
+def has_expenses(session: Session) -> bool:
+    return session.scalar(select(Expense.id).limit(1)) is not None
+
+
 def list_expenses(
     session: Session,
     *,
